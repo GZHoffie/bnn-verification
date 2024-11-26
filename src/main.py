@@ -1,6 +1,6 @@
 import numpy as np
 from itertools import product
-import math
+import math    
 
 
 class binary_function:
@@ -29,6 +29,10 @@ class binary_function:
 
         return res
     
+    """
+    Utilities for naive Brute force computation of Fourier coefficients.
+    """
+    
     def sample_input(self, num_samples, restrictions=None):
         """
         Sample a set of inputs with or without restrictions.
@@ -52,39 +56,7 @@ class binary_function:
         
         return res
     
-    def goldreich_levin_sample_paired_input(self, num_samples, J=[]):
-        """
-        Sample a set of paired inputs for the Goldreich-Levin algorithm.
-        """
-        samples_1 = []
-        samples_2 = []
-        for _ in range(num_samples):
-            sample_1 = np.random.choice([1, -1], self.n)
-            sample_2 = np.random.choice([1, -1], self.n)
-            # Sample z uniformly at random on the coordinates in `S`
-            for i in range(self.n):
-                if i not in J:
-                    z_i = np.random.choice([1, -1])
-                    sample_1[i] = z_i
-                    sample_2[i] = z_i
-            
-            samples_1.append(sample_1)
-            samples_2.append(sample_2)
-        
-        samples_1 = np.array(samples_1)
-        samples_2 = np.array(samples_2)
-        
-        return samples_1, samples_2
     
-    def goldreich_levin_estimate_weight(self, num_samples, S, J):
-        s1, s2 = self.goldreich_levin_sample_paired_input(num_samples, J)
-
-        # Compute function values
-        res = self.compute_function_values(s1) * self.compute_chi_S(s1, S) * \
-              self.compute_function_values(s2) * self.compute_chi_S(s2, S)
-        
-        return np.mean(res)
-
 
     def compute_function_values(self, inputs):
         """
@@ -160,6 +132,46 @@ class binary_function:
         inputs = self.sample_input(num_samples)
         values = self.compute_function_values(inputs)
         return self._compute_single_fourier_coefficient(values, inputs, S)
+    
+
+    """
+    Utilities for Goldreich-Levin algorithm.
+    """
+
+    
+    def goldreich_levin_sample_paired_input(self, num_samples, J=[]):
+        """
+        Sample a set of paired inputs for the Goldreich-Levin algorithm.
+        """
+        samples_1 = []
+        samples_2 = []
+        for _ in range(num_samples):
+            sample_1 = np.random.choice([1, -1], self.n)
+            sample_2 = np.random.choice([1, -1], self.n)
+            # Sample z uniformly at random on the coordinates in `S`
+            for i in range(self.n):
+                if i not in J:
+                    z_i = np.random.choice([1, -1])
+                    sample_1[i] = z_i
+                    sample_2[i] = z_i
+            
+            samples_1.append(sample_1)
+            samples_2.append(sample_2)
+        
+        samples_1 = np.array(samples_1)
+        samples_2 = np.array(samples_2)
+        
+        return samples_1, samples_2
+    
+    def goldreich_levin_estimate_weight(self, num_samples, S, J):
+        s1, s2 = self.goldreich_levin_sample_paired_input(num_samples, J)
+
+        # Compute function values
+        res = self.compute_function_values(s1) * self.compute_chi_S(s1, S) * \
+              self.compute_function_values(s2) * self.compute_chi_S(s2, S)
+        
+        return np.mean(res)
+
 
     
     def goldreich_levin_bucket(self, num_samples, k, S):
@@ -211,23 +223,170 @@ class binary_function:
         estimated_coeffs = {}
         S = []
         return self.goldreich_levin_recursive(num_samples, 0, tau, S, estimated_coeffs)
+    
+
+    """
+    Utilities for Chow parameters.
+    """
+
+    def chow_parameters(self, num_samples):
+        res = []
+        S = []
+        res.append(self.fourier_approximate_S(num_samples, S))
+        for i in range(self.n):
+            S = [i]
+            res.append(self.fourier_approximate_S(num_samples, S))
+        
+        return np.array(res)
 
 
+class BNN:
+    def __init__(self, n, h):
+        """
+        Creates a simple binarized neural network with random weights.
 
+        Parameters:
+        - n: Number of input variables.
+        - h: Number of neurons in the hidden layer.
 
-# Example usage
-if __name__ == "__main__":
-    def ltf(x):
-        # linear threshold function
-        if x[0] * 1 + x[1] * 1 + x[2] * -1 + x[3] * 1 + x[4] * 1 < 0:
+        Returns:
+        - weights: A dictionary containing the weights of the network.
+        """
+        self.weights = {}
+        self.biases = {}
+        self.scales = {}
+        # Random weights for input to hidden layer
+        self.weights['W1'] = np.random.choice([-1, 1], size=(h, n))
+        self.biases['B1'] = np.random.normal(0, 1, h)
+        self.scales['S1'] = np.random.normal(0, 1)
+
+        # Random weights for hidden to output layer
+        self.weights['W2'] = np.random.choice([-1, 1], size=(1, h))
+        self.biases['B2'] = np.random.normal(0, 1)
+        self.scales['S2'] = np.random.normal(0, 1)
+
+        self.n = n
+        self.h = h
+    
+    def layer1(self, x):
+        """
+        Compute the output of the first layer.
+        """
+        output = np.sign(self.scales['S1'] * (np.dot(self.weights['W1'], x) + self.biases['B1']))
+        # if output contains zero, replace with -1
+        output[output == 0] = -1
+        return output
+    
+    def layer2(self, x):
+        """
+        Compute the output of the second layer.
+        """
+        if self.scales['S2'] * (np.dot(self.weights['W2'], x) + self.biases['B2']) < 0:
             return -1
         else:
             return 1
     
-    f = binary_function(ltf, 5)
+    def full_network(self, x):
+        """
+        Compute the output of the full network.
+        """
+        return self.layer2(self.layer1(x))
+    
+
+    def fourier_exact(self):
+        """
+        Compute the exact Fourier coefficients of the network.
+        """
+        f = binary_function(self.full_network, self.n)
+        return f.fourier_exact()
+    
+    def fourier_approximate(self, num_samples):
+        """
+        Compute the approximate Fourier coefficients of the network.
+        """
+        f = binary_function(self.full_network, self.n)
+        return f.fourier_approximate(num_samples)
+    
+    def goldreich_levin(self, tau, num_samples):
+        """
+        Compute the significant Fourier coefficients of the network.
+        """
+        f = binary_function(self.full_network, self.n)
+        return f.goldreich_levin(tau, num_samples)
+    
+
+    def chow(self, num_samples):
+        # For each output in the first layer, compute the chow parameters
+        chow_l1 = []
+        for i in range(self.h):
+            def f(x):
+                if self.scales['S1'] * (np.dot(self.weights['W1'][i], x) + self.biases['B1'][i]) < 0:
+                    return -1
+                else:
+                    return 1
+            f = binary_function(f, self.n)
+            chow_l1.append(f.chow_parameters(num_samples))
+        
+        chow_l1 = np.array(chow_l1)
+        print(chow_l1)
+
+        # For the output layer
+        chow_l2 = []
+        def f(x):
+            if self.scales['S2'] * (np.dot(self.weights['W2'], x) + self.biases['B2']) < 0:
+                return -1
+            else:
+                return 1
+        f = binary_function(f, self.h)
+        chow_l2.append(f.chow_parameters(num_samples))
+    
+        chow_l2 = np.array(chow_l2)
+        #print(chow_l2)
+        #print(chow_l2[:,1:])
+
+        coefficients = chow_l2[:,1:] @ chow_l1
+        coefficients[:,0] += chow_l2[:,0]
+        coefficients = coefficients.flatten()
+
+        res = {}
+        for i in range(len(coefficients)):
+            if i == 0:
+                res[tuple([])] = coefficients[i]
+            else:
+                res[tuple([i-1])] = coefficients[i]
+        
+        return res
+
+        
+
+
+
+    
+
+
+
+
+if __name__ == "__main__":
+    """
+    
+    def ltf(x):
+        # linear threshold function
+        if x[0] == -1 and x[1] == -1: #x[0] * 1 + x[1] * 1 + x[2] * -1 + x[3] * 1 + x[4] * 1 < 0:
+            return -1
+        else:
+            return 1
+    
+    f = binary_function(ltf, 2)
 
     print(f.fourier_exact())
 
-    print(f.fourier_approximate(10000))
+    #print(f.fourier_approximate(10000))
 
-    print(f.goldreich_levin(0.1, 1000))
+    #print(f.goldreich_levin(0.1, 1000))
+    """
+
+    bnn = BNN(5, 3)
+    print(bnn.fourier_exact())
+    print(bnn.fourier_approximate(1000))
+    print(bnn.goldreich_levin(0.1, 1000))
+    print(bnn.chow(1000))
