@@ -1,6 +1,7 @@
 import numpy as np
 from itertools import product
 import math    
+import matplotlib.pyplot as plt
 
 
 class binary_function:
@@ -120,8 +121,8 @@ class binary_function:
         """
         Compute the approximate Fourier coefficients.
         """
-        if num_samples > 2 ** self.n:
-            print("Warning: The number of samples is greater than the number of possible inputs. Consider using the exact method.")
+        #if num_samples > 2 ** self.n:
+        #    print("Warning: The number of samples is greater than the number of possible inputs. Consider using the exact method.")
         
         
         inputs = self.sample_input(num_samples)
@@ -191,7 +192,7 @@ class binary_function:
 
         # Compute the weight of the bucket B_k,S
         weight = self.goldreich_levin_bucket(num_samples, k, S)
-        print(f"Weight of B_{k},{S}: {weight}")
+        #print(f"Weight of B_{k},{S}: {weight}")
 
         
         if k == self.n:
@@ -231,11 +232,11 @@ class binary_function:
 
     def chow_parameters(self, num_samples):
         res = []
-        S = []
-        res.append(self.fourier_approximate_S(num_samples, S))
+        samples = self.sample_input(num_samples)
+        values = self.compute_function_values(samples)
+        res.append(self._compute_single_fourier_coefficient(values, samples, []))
         for i in range(self.n):
-            S = [i]
-            res.append(self.fourier_approximate_S(num_samples, S))
+            res.append(self._compute_single_fourier_coefficient(values, samples, [i]))
         
         return np.array(res)
 
@@ -328,7 +329,7 @@ class BNN:
             chow_l1.append(f.chow_parameters(num_samples))
         
         chow_l1 = np.array(chow_l1)
-        print(chow_l1)
+        #print(chow_l1)
 
         # For the output layer
         chow_l2 = []
@@ -360,6 +361,142 @@ class BNN:
         
 
 
+def method_time_benchmark(n_list, h, num_samples, tau):
+    """
+    Benchmark the time complexity of the Fourier computation methods.
+    """
+    import time
+
+    exact_times = []
+    approx_times = []
+    goldreich_levin_times = []
+    chow_times = []
+    
+    exact_n_list = []
+    approximated_n_list = []
+
+    for n in n_list:
+        bnn = BNN(n, h)
+
+        # Exact computation is only feasible (<80s) for n <= 16
+        if n <= 16:
+            exact_n_list.append(n)
+            start = time.time()
+            bnn.fourier_exact()
+            end = time.time()
+            exact_times.append(end - start)
+            print(f"n = {n}, exact time = {end - start}")
+
+        if n <= 22:
+            approximated_n_list.append(n)
+            start = time.time()
+            bnn.fourier_approximate(num_samples)
+            end = time.time()
+            approx_times.append(end - start)
+            print(f"n = {n}, approximate time = {end - start}")
+
+        start = time.time()
+        bnn.goldreich_levin(tau, num_samples)
+        end = time.time()
+        goldreich_levin_times.append(end - start)
+        print(f"n = {n}, goldreich-levin time = {end - start}")
+
+        start = time.time()
+        bnn.chow(num_samples)
+        end = time.time()
+        chow_times.append(end - start)
+        print(f"n = {n}, chow time = {end - start}")
+
+    plt.plot(exact_n_list, exact_times, label="Exact", marker='o')
+    plt.plot(approximated_n_list, approx_times, label="Approximate", marker='o')
+    plt.plot(n_list, goldreich_levin_times, label="Goldreich-Levin", marker='o')
+    plt.plot(n_list, chow_times, label="Chow", marker='o')
+    plt.xlabel("Number of input variables")
+    plt.ylabel("Time (s)")
+    plt.legend()
+    plt.savefig("benchmark_time.pdf")
+    
+    plt.show()
+
+
+def benchmark_correctness(n_list, h, num_samples, tau, threshold, num_trials):
+    """
+    Benchmark the correctness of the Fourier computation methods, 
+    by comparing the estimated coefficients with the exact ones.
+    """
+
+    recall_list = {"approximate": [], "goldreich_levin": [], "chow": []}
+    precision_list = {"approximate": [], "goldreich_levin": [], "chow": []}
+
+    for n in n_list:
+        recall = {"approximate": [], "goldreich_levin": [], "chow": []}
+        precision = {"approximate": [], "goldreich_levin": [], "chow": []}
+
+        for _ in range(num_trials):
+            bnn = BNN(n, h)
+
+            # Use exact as the ground truth
+            exact_coeffs = bnn.fourier_exact()
+            exact_coeffs = {k: v for k, v in exact_coeffs.items() if abs(v) > threshold}
+
+            approximated_coeffs = bnn.fourier_approximate(num_samples)
+            approximated_coeffs = {k: v for k, v in approximated_coeffs.items() if abs(v) > threshold}
+
+            goldreich_levin_coeffs = bnn.goldreich_levin(tau, num_samples)
+            goldreich_levin_coeffs = {k: v for k, v in goldreich_levin_coeffs.items() if abs(v) > threshold}
+
+            chow_coeffs = bnn.chow(num_samples)
+            chow_coeffs = {k: v for k, v in chow_coeffs.items() if abs(v) > threshold}
+
+            # Compute the recall and precision of the methods
+            recall["approximate"].append(len(exact_coeffs.keys() & approximated_coeffs.keys()) / len(exact_coeffs))
+            recall["goldreich_levin"].append(len(exact_coeffs.keys() & goldreich_levin_coeffs.keys()) / len(exact_coeffs))
+            recall["chow"].append(len(exact_coeffs.keys() & chow_coeffs.keys()) / len(exact_coeffs))
+
+            precision["approximate"].append(len(exact_coeffs.keys() & approximated_coeffs.keys()) / len(approximated_coeffs))
+            precision["goldreich_levin"].append(len(exact_coeffs.keys() & goldreich_levin_coeffs.keys()) / len(goldreich_levin_coeffs))
+            precision["chow"].append(len(exact_coeffs.keys() & chow_coeffs.keys()) / len(chow_coeffs))
+        
+        recall_list["approximate"].append(np.mean(recall["approximate"]))
+        recall_list["goldreich_levin"].append(np.mean(recall["goldreich_levin"]))
+        recall_list["chow"].append(np.mean(recall["chow"]))
+
+        print(f"n = {n}, approximate recall = {np.mean(recall['approximate'])}, goldreich-levin recall = {np.mean(recall['goldreich_levin'])}, chow recall = {np.mean(recall['chow'])}")
+
+        precision_list["approximate"].append(np.mean(precision["approximate"]))
+        precision_list["goldreich_levin"].append(np.mean(precision["goldreich_levin"]))
+        precision_list["chow"].append(np.mean(precision["chow"]))
+
+        print(f"n = {n}, approximate precision = {np.mean(precision['approximate'])}, goldreich-levin precision = {np.mean(precision['goldreich_levin'])}, chow precision = {np.mean(precision['chow'])}")
+
+
+
+    fig, axs = plt.subplots(2, 1, figsize=(8, 12))
+
+    axs[0].plot(n_list, recall_list["approximate"], label="Approximate", marker='o')
+    axs[0].plot(n_list, recall_list["goldreich_levin"], label="Goldreich-Levin", marker='o')
+    axs[0].plot(n_list, recall_list["chow"], label="Chow", marker='o')
+    axs[0].set_xlabel("Number of input variables")
+    axs[0].set_ylabel("Recall")
+    axs[0].legend()
+    axs[0].set_title("Recall vs Number of input variables")
+
+    axs[1].plot(n_list, precision_list["approximate"], label="Approximate", marker='o')
+    axs[1].plot(n_list, precision_list["goldreich_levin"], label="Goldreich-Levin", marker='o')
+    axs[1].plot(n_list, precision_list["chow"], label="Chow", marker='o')
+    axs[1].set_xlabel("Number of input variables")
+    axs[1].set_ylabel("Precision")
+    axs[1].legend()
+    axs[1].set_title("Precision vs Number of input variables")
+
+    plt.tight_layout()
+    plt.savefig("benchmark_recall_precision.pdf")
+    plt.show()
+
+
+
+
+
 
     
 
@@ -385,8 +522,17 @@ if __name__ == "__main__":
     #print(f.goldreich_levin(0.1, 1000))
     """
 
+    """
     bnn = BNN(5, 3)
     print(bnn.fourier_exact())
     print(bnn.fourier_approximate(1000))
     print(bnn.goldreich_levin(0.1, 1000))
     print(bnn.chow(1000))
+    """
+
+    #method_time_benchmark(range(1, 30), 3, 1000, 0.1)
+    benchmark_correctness(range(1, 15), 3, 2000, 0.1, 0.1, 10)
+    
+   
+
+    
