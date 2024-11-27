@@ -494,6 +494,60 @@ def benchmark_correctness(n_list, h, num_samples, tau, threshold, num_trials):
     plt.show()
 
 
+def benchmark_l2_difference(n_list, h, num_samples, tau, threshold, num_trials):
+    """
+    Benchmark the L2 difference of the Fourier computation methods, 
+    by comparing the estimated coefficients with the exact ones.
+    """
+    l2_diff_list = {"approximate": [], "goldreich_levin": [], "chow": []}
+
+    for n in n_list:
+        l2_diff = {"approximate": [], "goldreich_levin": [], "chow": []}
+
+        for _ in range(num_trials):
+            bnn = BNN(n, h)
+
+            # Use exact as the ground truth
+            exact_coeffs = bnn.fourier_exact()
+            exact_coeffs = {k: v for k, v in exact_coeffs.items() if abs(v) > threshold}
+
+            approximated_coeffs = bnn.fourier_approximate(num_samples)
+            approximated_coeffs = {k: v for k, v in approximated_coeffs.items() if abs(v) > threshold}
+
+            goldreich_levin_coeffs = bnn.goldreich_levin(tau, num_samples)
+            goldreich_levin_coeffs = {k: v for k, v in goldreich_levin_coeffs.items() if abs(v) > threshold}
+
+            chow_coeffs = bnn.chow(num_samples)
+            chow_coeffs = {k: v for k, v in chow_coeffs.items() if abs(v) > threshold}
+
+            # Compute the L2 difference of the methods
+            l2_diff["approximate"].append(np.linalg.norm(
+                np.array(list(exact_coeffs.values())) - np.array([approximated_coeffs.get(k, 0) for k in exact_coeffs.keys()])
+            ))
+            l2_diff["goldreich_levin"].append(np.linalg.norm(
+                np.array(list(exact_coeffs.values())) - np.array([goldreich_levin_coeffs.get(k, 0) for k in exact_coeffs.keys()])
+            ))
+            l2_diff["chow"].append(np.linalg.norm(
+                np.array(list(exact_coeffs.values())) - np.array([chow_coeffs.get(k, 0) for k in exact_coeffs.keys()])
+            ))
+
+        l2_diff_list["approximate"].append(np.mean(l2_diff["approximate"]))
+        l2_diff_list["goldreich_levin"].append(np.mean(l2_diff["goldreich_levin"]))
+        l2_diff_list["chow"].append(np.mean(l2_diff["chow"]))
+
+        print(f"n = {n}, approximate L2 difference = {np.mean(l2_diff['approximate'])}, goldreich-levin L2 difference = {np.mean(l2_diff['goldreich_levin'])}, chow L2 difference = {np.mean(l2_diff['chow'])}")
+
+    plt.plot(n_list, l2_diff_list["approximate"], label="Approximate", marker='o')
+    plt.plot(n_list, l2_diff_list["goldreich_levin"], label="Goldreich-Levin", marker='o')
+    plt.plot(n_list, l2_diff_list["chow"], label="Chow", marker='o')
+    plt.xlabel("Number of input variables")
+    plt.ylabel("L2 Difference")
+    plt.legend()
+    plt.savefig("benchmark_l2_difference.pdf")
+    
+    plt.show()
+
+
 
 
 
@@ -531,8 +585,8 @@ if __name__ == "__main__":
     """
 
     #method_time_benchmark(range(1, 30), 3, 1000, 0.1)
-    benchmark_correctness(range(1, 15), 3, 2000, 0.1, 0.1, 10)
-    
+    #benchmark_correctness(range(1, 15), 3, 2000, 0.1, 0.1, 10)
+    benchmark_l2_difference(range(1, 15), 3, 2000, 0.1, 0.1, 10)
    
 
     
