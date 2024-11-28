@@ -9,9 +9,29 @@ class binary_function:
         """
         parameters:
         - f: A function that takes a list of binary inputs and returns a binary output.
+             Can be in the form of Fourier coefficients, e.g. {(): 1, (0,): -1, (1,): 1, (0, 1): 1}.
         - n: Number of input variables.
         """
-        self.f = f
+
+        if isinstance(f, dict):
+            # If f is a dictionary, then it is a set of Fourier coefficients.
+            def f_func(x):
+                res = 0
+                for k, v in f.items():
+                    chi_S = 1
+                    for i in k:
+                        chi_S *= x[i]
+                    res += v * chi_S
+                
+                if res < 0:
+                    return -1
+                else:
+                    return 1
+
+            self.f = f_func
+        else:
+            self.f = f
+        
         self.n = n
 
     def __call__(self, x):
@@ -29,6 +49,26 @@ class binary_function:
         res[res == 0] = 1
 
         return res
+    
+    def dist_exact(self, another_f):
+        """
+        Compute the L2 difference between two functions.
+        """
+        inputs = self._all_possible_inputs()
+        values = self.compute_function_values(inputs)
+        another_values = another_f.compute_function_values(inputs)
+
+        return np.mean(np.abs(values - another_values))
+    
+    def dist_approximate(self, another_f, num_samples):
+        """
+        Compute the L2 difference between two functions by sampling from the input space {-1,1}^n.
+        """
+        inputs = self.sample_input(num_samples)
+        values = self.compute_function_values(inputs)
+        another_values = another_f.compute_function_values(inputs)
+
+        return np.mean(np.abs(values - another_values))
     
     """
     Utilities for naive Brute force computation of Fourier coefficients.
@@ -293,6 +333,23 @@ class BNN:
         """
         return self.layer2(self.layer1(x))
     
+    def dist_exact(self, another_f):
+        """
+        Calculate the distance between BNN and `another_f`.
+        Here `another_f` is a dict of Fourier coefficients.
+        """
+        f = binary_function(self.full_network, self.n)
+        another_f = binary_function(another_f, self.n)
+        return f.dist_exact(another_f)
+    
+    def dist_approximate(self, another_f, num_samples):
+        """
+        Calculate the distance between BNN and `another_f` by sampling.
+        Here `another_f` is a dict of Fourier coefficients.
+        """
+        f = binary_function(self.full_network, self.n)
+        another_f = binary_function(another_f, self.n)
+        return f.dist_approximate(another_f, num_samples)
 
     def fourier_exact(self):
         """
@@ -494,58 +551,48 @@ def benchmark_correctness(n_list, h, num_samples, tau, threshold, num_trials):
     plt.show()
 
 
-def benchmark_l2_difference(n_list, h, num_samples, tau, threshold, num_trials):
+def benchmark_dist(n_list, h, num_samples, tau, threshold, num_trials):
     """
     Benchmark the L2 difference of the Fourier computation methods, 
     by comparing the estimated coefficients with the exact ones.
     """
-    l2_diff_list = {"approximate": [], "goldreich_levin": [], "chow": []}
+    dist_list = {"approximate": [], "goldreich_levin": [], "chow": []}
 
     for n in n_list:
-        l2_diff = {"approximate": [], "goldreich_levin": [], "chow": []}
+        dist_diff = {"approximate": [], "goldreich_levin": [], "chow": []}
 
         for _ in range(num_trials):
             bnn = BNN(n, h)
 
             # Use exact as the ground truth
             exact_coeffs = bnn.fourier_exact()
-            exact_coeffs = {k: v for k, v in exact_coeffs.items() if abs(v) > threshold}
 
             approximated_coeffs = bnn.fourier_approximate(num_samples)
-            approximated_coeffs = {k: v for k, v in approximated_coeffs.items() if abs(v) > threshold}
 
             goldreich_levin_coeffs = bnn.goldreich_levin(tau, num_samples)
-            goldreich_levin_coeffs = {k: v for k, v in goldreich_levin_coeffs.items() if abs(v) > threshold}
 
             chow_coeffs = bnn.chow(num_samples)
-            chow_coeffs = {k: v for k, v in chow_coeffs.items() if abs(v) > threshold}
 
-            # Compute the L2 difference of the methods
-            l2_diff["approximate"].append(np.linalg.norm(
-                np.array(list(exact_coeffs.values())) - np.array([approximated_coeffs.get(k, 0) for k in exact_coeffs.keys()])
-            ))
-            l2_diff["goldreich_levin"].append(np.linalg.norm(
-                np.array(list(exact_coeffs.values())) - np.array([goldreich_levin_coeffs.get(k, 0) for k in exact_coeffs.keys()])
-            ))
-            l2_diff["chow"].append(np.linalg.norm(
-                np.array(list(exact_coeffs.values())) - np.array([chow_coeffs.get(k, 0) for k in exact_coeffs.keys()])
-            ))
+            # Compute the distance of the methods
+            dist_diff["approximate"].append(bnn.dist_exact(approximated_coeffs))
+            dist_diff["goldreich_levin"].append(bnn.dist_exact(goldreich_levin_coeffs))
+            dist_diff["chow"].append(bnn.dist_exact(chow_coeffs))
+        
+        dist_list["approximate"].append(np.mean(dist_diff["approximate"]))
+        dist_list["goldreich_levin"].append(np.mean(dist_diff["goldreich_levin"]))
+        dist_list["chow"].append(np.mean(dist_diff["chow"]))
 
-        l2_diff_list["approximate"].append(np.mean(l2_diff["approximate"]))
-        l2_diff_list["goldreich_levin"].append(np.mean(l2_diff["goldreich_levin"]))
-        l2_diff_list["chow"].append(np.mean(l2_diff["chow"]))
+        print(f"n = {n}, approximate dist = {np.mean(dist_diff['approximate'])}, goldreich-levin dist = {np.mean(dist_diff['goldreich_levin'])}, chow dist = {np.mean(dist_diff['chow'])}")
 
-        print(f"n = {n}, approximate L2 difference = {np.mean(l2_diff['approximate'])}, goldreich-levin L2 difference = {np.mean(l2_diff['goldreich_levin'])}, chow L2 difference = {np.mean(l2_diff['chow'])}")
-
-    plt.plot(n_list, l2_diff_list["approximate"], label="Approximate", marker='o')
-    plt.plot(n_list, l2_diff_list["goldreich_levin"], label="Goldreich-Levin", marker='o')
-    plt.plot(n_list, l2_diff_list["chow"], label="Chow", marker='o')
+    plt.plot(n_list, dist_list["approximate"], label="Approximate", marker='o')
+    plt.plot(n_list, dist_list["goldreich_levin"], label="Goldreich-Levin", marker='o')
+    plt.plot(n_list, dist_list["chow"], label="Chow", marker='o')
     plt.xlabel("Number of input variables")
-    plt.ylabel("L2 Difference")
+    plt.ylabel("L2 difference")
     plt.legend()
-    plt.savefig("benchmark_l2_difference.pdf")
-    
+    plt.savefig("benchmark_dist.pdf")
     plt.show()
+
 
 
 
@@ -586,7 +633,7 @@ if __name__ == "__main__":
 
     #method_time_benchmark(range(1, 30), 3, 1000, 0.1)
     #benchmark_correctness(range(1, 15), 3, 2000, 0.1, 0.1, 10)
-    benchmark_l2_difference(range(1, 15), 3, 2000, 0.1, 0.1, 10)
+    benchmark_dist(range(1, 15), 3, 2000, 0.1, 0.1, 10)
    
 
     
